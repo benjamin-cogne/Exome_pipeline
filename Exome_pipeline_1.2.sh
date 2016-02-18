@@ -556,7 +556,7 @@ DATE=`date +%Y-%m-%d`
 echo -e "USE Exome_db;" > $Chemin/temp/mysql_id.txt
 echo -e "INSERT INTO exome_id VALUES (NULL,'${Name}','Clinical','Illumina','Integragen','Sureselect_CRE','${DATE}','','${HPO}','${version}','n');" >> $Chemin/temp/mysql_id.txt
 
-mysql -u bcogne -p bencog15 < $Chemin/temp/mysql_id.txt
+mysql -u bcogne -p ******** < $Chemin/temp/mysql_id.txt
 
 python $VariantsMysql $Chemin/Variants/variants_VQSR.${Name}.allforDB.hg19_multianno.txt ${Name}
 
