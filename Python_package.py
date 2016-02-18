@@ -1,6 +1,7 @@
 #!/bin/python
 
 import subprocess
+from subprocess import call
 import matplotlib as mpl
 mpl.use('Agg')
 import matplotlib.pyplot as plt
@@ -8,10 +9,11 @@ from matplotlib.backends.backend_pdf import PdfPages
 import numpy as np
 import sys
 import os
+import MySQLdb
 from datetime import datetime
 
 if len(sys.argv) == 1:
-    print("\n####################################################################################\n\n\tI am a package of python scripts to be used in an exome analysis pipeline\n\n\tUsage: python Python_package.py [Name Scripts] [Arguments]\n\n\tName Scripts : ExomePlot, Addmpilup, VariantsPrioritize, ReduceMultiallelicVCF, CheckCoverage\n")    
+    print("\n####################################################################################\n\n\tI am a package of python scripts to be used in an exome analysis pipeline\n\n\tUsage: python Python_package.py [Name Scripts] [Arguments]\n\n\tName Scripts : ExomePlot, Addmpilup, VariantsPrioritize, ReduceMultiallelicVCF, CheckCoverage, IGVSnapshots\n")    
     exit()
 
 if sys.argv[1] == 'ReduceMultiallelicVCF':
@@ -27,7 +29,7 @@ if sys.argv[1] == 'ReduceMultiallelicVCF':
     print('Starting of python script: ReduceMultiallelicVCF')
     for line in VCF:
         it+=1
-        if it % 1000 == 0:
+        if it % 10000 == 0:
             print(str(it)+' sites processed')
         if line[0] == '#':
             VCF_biall.write(line)
@@ -69,6 +71,8 @@ if sys.argv[1] == 'ReduceMultiallelicVCF':
                 else:
                     GT_after = info_data[info.index('GT')]
             ### Retrieving constant sample info data fields
+                if not 'DP' in info:
+                    continue            
                 DP = info_data[info.index('DP')]
                 GQ = info_data[info.index('GQ')]
                 PL =info_data[info.index('PL')]
@@ -181,13 +185,39 @@ if sys.argv[1] == 'Addmpilup':
 
 if sys.argv[1] == 'VariantsPrioritize':
 
-    if len(sys.argv) != 4 :
-        print('\nUsage: Python_package.py VariantsPrioritize [Variants file] [OMIM file]\n')
+    if len(sys.argv) != 9 :
+        print('\nUsage: Python_package.py VariantsPrioritize [Variants file] [OMIM file] [HPO file] [HPO file genes to phenotype][GDI file] [Name_analysis] [HPO list]\n')
         exit()
 
     Variants = sys.argv[2]
     OMIM = sys.argv[3]
+    HPO_file_IN = sys.argv[4]
+    HPO_file_genesTopheno = sys.argv[5]
+    GDI_file_IN = sys.argv[6]
+    Name = sys.argv[7]
+    list_HP = sys.argv[8].split(',')
+    
+    # Create dictionary with genes related to phenotype
+    file=open(HPO_file_IN,'r')
+    dic_genes={}
+    dic_desc={}
+    for line in file:
+        if line[0] != '#':
+            field=line.split('\t')
+            HP=field[0]
+            desc=field[1]
+            gene=field[3][:-1]
+            if HP in list_HP:
 
+                if not HP in dic_desc.keys():
+                    dic_desc[HP]=desc
+                if not HP in dic_genes.keys():
+                    dic_genes[HP]=[gene]
+                else:
+                    dic_genes[HP].append(gene)
+
+    file.close()
+        
     # Create dictionary with OMIM gene to disease database [gene:disease]
     file=open(OMIM,'r')
     OMIM_lib={}
@@ -196,27 +226,212 @@ if sys.argv[1] == 'VariantsPrioritize':
         OMIM_lib[field[0]]=field[1][:-1]
     file.close()
 
+    # Create dictionary with the GDI phred of genes
+    GDI_file=open(GDI_file_IN,'r')
+    GDI_lib={}
+    l=0
+    for line in GDI_file:
+        l+=1
+        if l == 1:
+            continue
+        else:
+            field=line.split('\t')
+            GDI_lib[field[0]]=field[2]
+    GDI_file.close()
+    
     # Writing new file with new MAF filters and OMIM annotation
     file=open(Variants,'r')
     OUT=open(Variants+'.python_filtered.tab','w')
+    Gene_before=''
 
     for line in file:
         if line[0] == '#':
             field=line.split('\t')
-            OUT.write('\t'.join(field[:25])+'\t'+'OMIM'+'\t'+'\t'.join(field[25:]))
+            OUT.write('\t'.join(field[:10])+'\t'+'GDI phred'+'\t'+'Biological process'+'\t'+'OMIM'+'\t'+'HPO'+'\t'+'Trans'+'\t'+'Clinic'+'\t'+'Internal DB'+'\t'+'\t'.join(field[10:]))
         else:
             field=line.split('\t')
-            # Filter MAF<0.001 in EXAC and ESP
-            if (field[10]=='.' or float(field[10])< 0.001) and (field[15]=='.' or float(field[15])< 0.001):
-            # Add OMIM annotation
-                if field[6] in OMIM_lib.keys():
-                    OMIM_disease = OMIM_lib[field[6]]
-                else:
-                    OMIM_disease = '.'
-                OUT.write('\t'.join(field[:25])+'\t'+OMIM_disease+'\t'+'\t'.join(field[25:]))
+            # Filter MAF<0.005 in EXAC and ESP
+            if (field[10]=='.' or float(field[10])< 0.005) and (field[15]=='.' or float(field[15])< 0.005):
 
+            # Add OMIM annotation and genes HP terms correspondind to phenotype query (HP terms)
+                OMIM_disease = '.'
+                gene=field[6]
+                if len(gene.split(';')) > 1:
+                    Gene=gene.split(';')[0]
+                elif len(gene.split(',')) > 1:
+                    Gene=gene.split(',')[0]
+                else:
+                    Gene=gene  
+                    
+                if Gene in OMIM_lib.keys():
+                        OMIM_disease = OMIM_lib[Gene]
+                
+                #call(["wget", "http://www.genecards.org/cgi-bin/carddisp.pl?gene="+Gene,"-O" ])
+                list_HP=[]
+                for key in dic_genes.keys():
+                    if Gene in dic_genes[key]:
+                        list_HP.append(dic_desc[key])
+                
+            # Iteration through HPO gene to phenotype and creation of transmission and clinical symptoms lists
+                list_clinic=[]
+                transmission=[]
+                dis_to_pheno=open(HPO_file_genesTopheno,'r')
+                for i in dis_to_pheno:
+                    if i[0] != '#':
+                        field_HPO=i.split('\t')
+                        if field_HPO[1] == Gene:
+                            if field_HPO[3] in ['HP:0000006','HP:0000007','HP:0001419']:
+                                if field_HPO[3] == 'HP:0000006':
+                                    transmission.append('AD')
+                                if field_HPO[3] == 'HP:0000007':
+                                    transmission.append('AR')
+                                if field_HPO[3] == 'HP:0001419':
+                                    transmission.append('X')
+                            else:
+                                list_clinic.append(field_HPO[4][:-1])
+                list_clinic = sorted(set(list_clinic))
+                transmission = sorted(set(transmission))
+            
+            #Get Internal database frequency
+                db = MySQLdb.connect(host="127.0.0.1",user="bcogne",passwd="*******",db='Exome_db')
+                cur = db.cursor()
+                command = "SELECT name FROM exome_id WHERE NOT name LIKE '%_E'"
+                cur.execute(command)
+                results = cur.fetchall()
+                nb_variants = 0
+                nb_exomes = 0
+                for row in results:
+                    nb_exomes+=1
+                    name = row[0]
+                    cur_exome = db.cursor()
+                    command = "SELECT * FROM "+name+" WHERE chr='"+field[53]+"' AND pos='"+field[54]+"' AND ref='"+field[56]+"' AND alt='"+field[57]+"' LIMIT 1;"
+                    cur_exome.execute(command)
+                    if cur_exome.rowcount == 1:
+                        nb_variants+=1
+            
+            # Get GO from Ensembl BioMart file giving gene to GO biological process relationship
+                if Gene != Gene_before:
+                    #call(["wget", "-O","/d2/Exome_analysis_BC/tmp/results.txt",'http://www.ensembl.org/biomart/martservice?query=<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE Query><Query  virtualSchemaName = "default" formatter = "TSV" header = "0" uniqueRows = "1" count = "" datasetConfigVersion = "0.6" ><Dataset name = "hsapiens_gene_ensembl" interface = "default" ><Filter name = "hgnc_symbol" value = "'+Gene+'"/><Filter name = "go_parent_name" value = "regulation of biological process"/><Attribute name = "name_1006" /><Attribute name = "hgnc_symbol" /></Dataset></Query>'])
+                    GO_file=open('/d2/Exome_analysis_BC/Exome_pipeline_datas/GeneToGO_ensembl_biomart_11-2015.txt','r')
+                    GO=[]
+                    for line in GO_file:
+                        field_GO=line.split('\t')
+                        if field_GO[1] == Gene:
+                            GO.append(field_GO[0])
+                Gene_before=Gene
+            
+            # Get GDI phred:
+                if Gene in GDI_lib.keys():
+                    GDI=GDI_lib[Gene]
+                else:
+                    GDI='.'
+                    
+            #Add hypertext links to alignment igv snapshot and genecard and write variants lines
+
+                start = int(field[1]) - 110
+                stop = int(field[1]) + 100
+
+                OUT.write('=LIEN_HYPERTEXTE("./snapshots_'+Name+'/'+Gene+'_'+str(start)+'-'+str(stop)+'.png";"'+field[0]+'")\t'+'\t'.join(field[1:6])+'\t'+'=LIEN_HYPERTEXTE("http://www.genecards.org/cgi-bin/carddisp.pl?gene='+Gene+'";"'+Gene+'")\t'+'\t'.join(field[7:10])+'\t'+GDI+'\t'+','.join(GO)+'\t'+OMIM_disease+'\t'+','.join(list_HP)+'\t'+','.join(transmission)+'\t'+','.join(list_clinic)+'\t'+str(nb_variants)+'/'+str(nb_exomes)+'\t'+'\t'.join(field[10:]))
+                #OUT.write('=LIEN_HYPERTEXTE("./snapshots_'+Name+'/'+Gene+'_'+str(start)+'-'+str(stop)+'.png";"'+field[0]+'")\t'+'\t'.join(field[1:6])+'\t'+'=LIEN_HYPERTEXTE("http://www.genecards.org/cgi-bin/carddisp.pl?gene='+Gene+'";"'+Gene+'")\t'+'\t'.join(field[7:10])+'\t'+Gene_function+'\t'+OMIM_disease+'\t'+','.join(list_HP)+'\t'+','.join(transmission)+'\t'+','.join(list_clinic)+'\t'+str(nb_variants)+'/'+str(nb_exomes)+'\t'+'\t'.join(field[10:]))
+
+                Gene_before=Gene
+
+    db.commit()
+    file.close()
     OUT.close()
     
+    IN=open(Variants+'.python_filtered.tab','r')
+    ### get the number of lines in file
+    list_AR_genes={}
+    nb_line=0
+    for line in IN:
+        if nb_line > 0:
+            field=line.split('\t')
+            gene=field[6]
+            if len(gene.split(';')) > 1:
+                Gene=gene.split(';')[0]
+            elif len(gene.split(',')) > 1:
+                Gene=gene.split(',')[0]
+            else:
+                Gene=gene
+            if Gene in list_AR_genes.keys():
+                list_AR_genes[Gene]=list_AR_genes[Gene]+1
+            else:
+                list_AR_genes[Gene]=1
+        nb_line+=1
+    IN.close()
+    
+    IN=open(Variants+'.python_filtered.tab','r')
+    OUT_AR_X=open(Variants+'.python_filtered_AR-X.tab','w')
+    OUT_AD=open(Variants+'.python_filtered_AD.tab','w')
+    a=0
+    var=0
+    gene_before=''
+    writed = False
+    for line in IN:
+        a+=1
+        if a == 1:
+            OUT_AR_X.write(line)
+            OUT_AD.write(line)
+        else:
+            var+=1
+            field=line.split('\t')
+            gene=field[6]
+            
+            if len(gene.split(';')) > 1:
+                Gene=gene.split(';')[0]
+            elif len(gene.split(',')) > 1:
+                Gene=gene.split(',')[0]
+            else:
+                Gene=gene
+            if list_AR_genes[Gene] > 1 or field[57] == 'hom':
+                OUT_AR_X.write(line)
+            else:
+                OUT_AD.write(line)
+    
+    IN.close()
+    OUT_AD.close()
+    OUT_AR_X.close()
+
+if sys.argv[1] == 'IGVSnapshots':
+    ### Create text file with genome coordinates of mutations to allow snapshots with igv
+    ### Arguments : Python_package.py IGVSnapshots variants_IN.txt OUT.txt PATH_folder_images BAM_PATH
+    IN = open(sys.argv[2], 'r')
+
+    OUT = open(sys.argv[3],'w')
+    path_img = sys.argv[4]
+    OUT.write("new\ngenome hg19\nload "+sys.argv[5]+"\n")
+
+    for line in IN:
+        if line[0] != '#':
+            field = line.split('\t')
+            if (field[10]=='.' or float(field[10])< 0.005) and (field[15]=='.' or float(field[15])< 0.005) and field[59] == 'PASS':
+                gene=field[6]
+                if len(gene.split(';')) > 1:
+                    Gene=gene.split(';')[0]
+                elif len(gene.split(',')) > 1:
+                    Gene=gene.split(',')[0]
+                else:
+                    Gene=gene
+                pos=field[54]
+                ref=field[56]
+                alt=field[57]
+                if len(ref) > 1 and len (alt) > 1:
+                    if len(ref) > len(alt):
+                        pos=str(int(pos)+(len(alt)-1))
+                    elif len(ref) < len(alt):
+                        pos=str(int(pos)+(len(ref)-1))
+                start = int(pos) - 110
+                stop = int(pos) + 100
+                OUT.write("goto "+field[0]+":"+str(start)+"-"+str(stop)+"\n")
+                OUT.write("snapshot "+path_img+Gene+"_"+str(start)+"-"+str(stop)+".png\n")
+
+    OUT.write("exit")
+    IN.close()
+    OUT.close()
+   
+    call(["/opt/IGV_Snapshot/igv.sh", "--batch", sys.argv[3]])
+
 if sys.argv[1] == 'CheckCoverage':
 
     ### Program to add each base coverage information in the exome analyzed on targeted genes:
